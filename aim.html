@@ -1,189 +1,188 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Gold Aim Practice</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, orientation=landscape">
+    <title>Gold FPS V3 - Dual Stick</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
-        body { margin: 0; background: #0a0a0a; color: #ffd700; font-family: monospace; overflow: hidden; user-select: none; }
-        /* Minimalist Gold Granite aesthetic without the GPU lag */
-        body::before { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(circle at 50% 50%, #1a1500 0%, #000 80%); z-index: -1; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: monospace; color: #ffd700; }
+        canvas { display: block; }
         
-        #gameArea { position: relative; width: 100vw; height: 100vh; transition: transform 0.05s ease-out; }
-        canvas { display: block; width: 100%; height: 100%; }
+        #ui { position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 14px; height: 14px; border: 2px solid #ffd700; transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none; z-index: 10; }
         
-        .ui { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; pointer-events: none; text-shadow: 0 0 5px #ffd700; font-size: 16px; font-weight: bold; }
+        /* Joysticks */
+        .joystick-container { position: absolute; bottom: 30px; width: 120px; height: 120px; background: rgba(255, 215, 0, 0.1); border: 2px solid #ffd700; border-radius: 50%; touch-action: none; }
+        #move-joy { left: 40px; }
+        #fire-joy { right: 40px; background: rgba(255, 0, 0, 0.1); border-color: #ff4444; }
+        .knob { position: absolute; top: 50%; left: 50%; width: 40px; height: 40px; background: #ffd700; border-radius: 50%; transform: translate(-50%, -50%); }
         
-        #controls { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; padding: 0 10px; box-sizing: border-box; }
-        button { background: #000; color: #ffd700; border: 1px solid #ffd700; padding: 10px; border-radius: 5px; font-family: monospace; font-weight: bold; pointer-events: auto; text-transform: uppercase; font-size: 12px; }
-        .active-btn { background: #ffd700; color: #000; }
-        #reloadBtn { background: #550000; color: #ff5555; border-color: #ff5555; display: none; margin-left: 10px; }
+        #weapon-select { position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; }
+        button { background: #000; color: #ffd700; border: 1px solid #ffd700; padding: 10px; font-weight: bold; border-radius: 5px; }
+        .active { background: #ffd700; color: #000; }
     </style>
 </head>
 <body>
 
-    <div id="gameArea">
-        <div class="ui">
-            <span id="scoreDisplay">SCORE: 0</span>
-            <span id="ammoDisplay">AMMO: 12/12</span>
-        </div>
-        <canvas id="c"></canvas>
+    <div id="ui">SCORE: <span id="score">0</span> | AMMO: <span id="ammo">--</span></div>
+    <div id="crosshair"></div>
+    
+    <div id="weapon-select">
+        <button id="p-btn" onclick="setWep('pistol')">PISTOL</button>
+        <button id="m-btn" onclick="setWep('mg')">MACHINE GUN</button>
     </div>
 
-    <div id="controls">
-        </div>
+    <div id="move-joy" class="joystick-container"><div class="knob" id="move-knob"></div></div>
+    
+    <div id="fire-joy" class="joystick-container"><div class="knob" id="fire-knob"></div></div>
 
     <script>
-        const canvas = document.getElementById('c');
-        const ctx = canvas.getContext('2d', { alpha: false }); // alpha:false speeds up rendering on old phones
-        const gameArea = document.getElementById('gameArea');
-        
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        let score = 0;
-        let targets = [];
-        let shakeFrames = 0;
-        let shakeIntensity = 0;
-
-        // Weapon Dictionary
+        // --- WEAPON SPECS ---
         const weapons = {
-            pistol:  { name: 'Pistol', mag: 12, ammo: 12, recoil: 2, radius: 20 },
-            ak:      { name: 'AK-47', mag: 30, ammo: 30, recoil: 8, radius: 25 },
-            smg:     { name: 'Machine', mag: 50, ammo: 50, recoil: 5, radius: 20 },
-            gatling: { name: 'Gatling', mag: 150,ammo: 150,recoil: 12,radius: 15 }, // Hard to aim
-            grenade: { name: 'Grenade', mag: 4,  ammo: 4,  recoil: 20, radius: 80 }, // Big blast
-            missile: { name: 'Missile', mag: 1,  ammo: 1,  recoil: 30, radius: 120 } // Massive blast
+            pistol: { name: 'Pistol', fireRate: 400, recoil: 0.02, spread: 0.01, auto: false, mag: 12 },
+            mg: { name: 'Machine Gun', fireRate: 100, recoil: 0.05, spread: 0.04, auto: true, mag: 50 }
         };
-        
-        let currentWep = 'pistol';
+        let curWep = 'pistol';
+        let ammo = 12;
+        let isFiring = false;
+        let score = 0;
 
-        // Setup UI Buttons
-        const controls = document.getElementById('controls');
-        for (let key in weapons) {
-            let btn = document.createElement('button');
-            btn.id = 'btn_' + key;
-            btn.innerText = weapons[key].name;
-            btn.onclick = () => switchWeapon(key);
-            controls.appendChild(btn);
+        // --- THREE.JS SCENE ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio > 1 ? 1.5 : 1);
+        document.body.appendChild(renderer.domElement);
+
+        // Floor & Grid
+        const grid = new THREE.GridHelper(20, 20, 0xffd700, 0x333333);
+        scene.add(grid);
+
+        // Simple Gun Model
+        const gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.5), new THREE.MeshBasicMaterial({color: 0x444444}));
+        gun.position.set(0.2, -0.2, -0.4);
+        camera.add(gun);
+        scene.add(camera);
+        camera.position.y = 1.6;
+
+        // --- TARGET SYSTEM ---
+        let targets = [];
+        function spawn() {
+            const t = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.8, 0.1), new THREE.MeshBasicMaterial({color: 0xff0000}));
+            t.position.set((Math.random()-0.5)*15, 1, -Math.random()*10 - 5);
+            t.userData = { vx: (Math.random()-0.5)*0.05, vy: (Math.random()-0.5)*0.02 };
+            scene.add(t);
+            targets.push(t);
         }
-        
-        let reloadBtn = document.createElement('button');
-        reloadBtn.id = 'reloadBtn';
-        reloadBtn.innerText = 'RELOAD';
-        reloadBtn.onclick = reload;
-        controls.appendChild(reloadBtn);
+        for(let i=0; i<5; i++) spawn();
 
-        function switchWeapon(key) {
-            currentWep = key;
-            document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active-btn'));
-            document.getElementById('btn_' + key).classList.add('active-btn');
-            updateUI();
-        }
-        switchWeapon('pistol');
+        // --- JOYSTICK LOGIC ---
+        const moveData = { x: 0, y: 0 };
+        const fireData = { x: 0, y: 0 };
 
-        function updateUI() {
-            let w = weapons[currentWep];
-            document.getElementById('ammoDisplay').innerText = `AMMO: ${w.ammo}/${w.mag}`;
-            document.getElementById('scoreDisplay').innerText = `SCORE: ${score}`;
-            reloadBtn.style.display = (w.ammo === 0) ? 'block' : 'none';
-        }
-
-        function reload() {
-            weapons[currentWep].ammo = weapons[currentWep].mag;
-            updateUI();
-        }
-
-        // Spawn Targets
-        setInterval(() => {
-            if (targets.length < 5) {
-                targets.push({
-                    x: Math.random() * (canvas.width - 60) + 30,
-                    y: Math.random() * (canvas.height - 200) + 50,
-                    r: 0, maxR: Math.random() * 20 + 15,
-                    life: 100 // Frames until it vanishes
-                });
-            }
-        }, 800);
-
-        // Shooting Logic
-        canvas.addEventListener('touchstart', (e) => {
-            let w = weapons[currentWep];
-            if (w.ammo <= 0) { reloadBtn.style.display = 'block'; return; }
+        function handleJoystick(id, knobId, dataObj, onStart, onEnd) {
+            const container = document.getElementById(id);
+            const knob = document.getElementById(knobId);
             
-            w.ammo--;
-            updateUI();
+            container.addEventListener('touchstart', (e) => {
+                if(onStart) onStart();
+            }, {passive: false});
 
-            // Apply Knockback/Recoil (Screen Shake)
-            shakeFrames = 5;
-            shakeIntensity = w.recoil;
-
-            // Check hit (Supports Multi-touch)
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                let tx = e.changedTouches[i].clientX;
-                let ty = e.changedTouches[i].clientY;
-
-                // Visual Blast Radius
-                ctx.beginPath();
-                ctx.arc(tx, ty, w.radius, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 215, 0, 0.3)';
-                ctx.fill();
-
-                // Hit detection based on weapon blast radius
-                for (let j = targets.length - 1; j >= 0; j--) {
-                    let t = targets[j];
-                    let dist = Math.hypot(tx - t.x, ty - t.y);
-                    if (dist < w.radius + t.r) {
-                        targets.splice(j, 1);
-                        score += 10;
-                        updateUI();
-                    }
-                }
-            }
-        });
-
-        // Main Game Loop (Optimized for old phones)
-        function loop() {
-            // Draw Background (Clearing canvas)
-            ctx.fillStyle = '#0a0a0a';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Draw Targets
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = '#ffd700';
-            for (let i = targets.length - 1; i >= 0; i--) {
-                let t = targets[i];
-                t.life--;
-                if (t.r < t.maxR) t.r += 2; // Grow animation
+            container.addEventListener('touchmove', (e) => {
+                const touch = e.touches[0];
+                const rect = container.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
                 
-                if (t.life <= 0) {
-                    targets.splice(i, 1);
-                    continue;
-                }
-
-                ctx.beginPath();
-                ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
-                ctx.stroke();
+                let dx = (touch.clientX - centerX) / (rect.width / 2);
+                let dy = (touch.clientY - centerY) / (rect.height / 2);
                 
-                // Bullseye dot
-                ctx.beginPath();
-                ctx.arc(t.x, t.y, t.r * 0.3, 0, Math.PI * 2);
-                ctx.fillStyle = '#ffd700';
-                ctx.fill();
-            }
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist > 1) { dx /= dist; dy /= dist; }
+                
+                dataObj.x = dx; dataObj.y = dy;
+                knob.style.transform = `translate(calc(-50% + ${dx * 40}px), calc(-50% + ${dy * 40}px))`;
+            }, {passive: false});
 
-            // Screen Shake Logic (The "Knockback")
-            if (shakeFrames > 0) {
-                let dx = (Math.random() - 0.5) * shakeIntensity * 2;
-                let dy = (Math.random() - 0.5) * shakeIntensity * 2;
-                gameArea.style.transform = `translate(${dx}px, ${dy}px)`;
-                shakeFrames--;
-            } else {
-                gameArea.style.transform = `translate(0px, 0px)`;
-            }
-
-            requestAnimationFrame(loop);
+            container.addEventListener('touchend', () => {
+                dataObj.x = 0; dataObj.y = 0;
+                knob.style.transform = `translate(-50%, -50%)`;
+                if(onEnd) onEnd();
+            });
         }
-        loop();
+
+        handleJoystick('move-joy', 'move-knob', moveData);
+        handleJoystick('fire-joy', 'fire-knob', fireData, () => { isFiring = true; fireLoop(); }, () => { isFiring = false; });
+
+        // --- SHOOTING ---
+        const raycaster = new THREE.Raycaster();
+        function fire() {
+            if (ammo <= 0) return;
+            const w = weapons[curWep];
+            ammo--;
+            document.getElementById('ammo').innerText = ammo;
+
+            // Recoil
+            camera.rotation.x += w.recoil;
+            gun.position.z = -0.3; setTimeout(() => gun.position.z = -0.4, 50);
+
+            // Hitscan
+            raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+            const hits = raycaster.intersectObjects(targets);
+            if (hits.length > 0) {
+                const h = hits[0].object;
+                scene.remove(h);
+                targets = targets.filter(t => t !== h);
+                score += 100;
+                document.getElementById('score').innerText = score;
+                setTimeout(spawn, 1000);
+            }
+        }
+
+        let lastFire = 0;
+        function fireLoop() {
+            if (!isFiring) return;
+            const now = Date.now();
+            if (now - lastFire > weapons[curWep].fireRate) {
+                fire();
+                lastFire = now;
+            }
+            if (weapons[curWep].auto) requestAnimationFrame(fireLoop);
+        }
+
+        window.setWep = (type) => {
+            curWep = type;
+            ammo = weapons[type].mag;
+            document.getElementById('ammo').innerText = ammo;
+            document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            document.getElementById(type === 'pistol' ? 'p-btn' : 'm-btn').classList.add('active');
+        };
+        setWep('pistol');
+
+        // --- CORE LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Movement (Left Stick)
+            camera.translateZ(moveData.y * 0.1);
+            camera.translateX(moveData.x * 0.1);
+            camera.position.y = 1.6;
+
+            // Aiming (Right Stick)
+            camera.rotation.y -= fireData.x * 0.04;
+            camera.rotation.x -= fireData.y * 0.04;
+
+            // Target Movement
+            targets.forEach(t => {
+                t.position.x += t.userData.vx;
+                if(Math.abs(t.position.x) > 8) t.userData.vx *= -1;
+            });
+
+            renderer.render(scene, camera);
+        }
+        animate();
     </script>
 </body>
 </html>
