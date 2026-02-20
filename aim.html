@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gold Aim Practice</title>
+    <style>
+        body { margin: 0; background: #0a0a0a; color: #ffd700; font-family: monospace; overflow: hidden; user-select: none; }
+        /* Minimalist Gold Granite aesthetic without the GPU lag */
+        body::before { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(circle at 50% 50%, #1a1500 0%, #000 80%); z-index: -1; }
+        
+        #gameArea { position: relative; width: 100vw; height: 100vh; transition: transform 0.05s ease-out; }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        .ui { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; pointer-events: none; text-shadow: 0 0 5px #ffd700; font-size: 16px; font-weight: bold; }
+        
+        #controls { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; padding: 0 10px; box-sizing: border-box; }
+        button { background: #000; color: #ffd700; border: 1px solid #ffd700; padding: 10px; border-radius: 5px; font-family: monospace; font-weight: bold; pointer-events: auto; text-transform: uppercase; font-size: 12px; }
+        .active-btn { background: #ffd700; color: #000; }
+        #reloadBtn { background: #550000; color: #ff5555; border-color: #ff5555; display: none; margin-left: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="gameArea">
+        <div class="ui">
+            <span id="scoreDisplay">SCORE: 0</span>
+            <span id="ammoDisplay">AMMO: 12/12</span>
+        </div>
+        <canvas id="c"></canvas>
+    </div>
+
+    <div id="controls">
+        </div>
+
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d', { alpha: false }); // alpha:false speeds up rendering on old phones
+        const gameArea = document.getElementById('gameArea');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let score = 0;
+        let targets = [];
+        let shakeFrames = 0;
+        let shakeIntensity = 0;
+
+        // Weapon Dictionary
+        const weapons = {
+            pistol:  { name: 'Pistol', mag: 12, ammo: 12, recoil: 2, radius: 20 },
+            ak:      { name: 'AK-47', mag: 30, ammo: 30, recoil: 8, radius: 25 },
+            smg:     { name: 'Machine', mag: 50, ammo: 50, recoil: 5, radius: 20 },
+            gatling: { name: 'Gatling', mag: 150,ammo: 150,recoil: 12,radius: 15 }, // Hard to aim
+            grenade: { name: 'Grenade', mag: 4,  ammo: 4,  recoil: 20, radius: 80 }, // Big blast
+            missile: { name: 'Missile', mag: 1,  ammo: 1,  recoil: 30, radius: 120 } // Massive blast
+        };
+        
+        let currentWep = 'pistol';
+
+        // Setup UI Buttons
+        const controls = document.getElementById('controls');
+        for (let key in weapons) {
+            let btn = document.createElement('button');
+            btn.id = 'btn_' + key;
+            btn.innerText = weapons[key].name;
+            btn.onclick = () => switchWeapon(key);
+            controls.appendChild(btn);
+        }
+        
+        let reloadBtn = document.createElement('button');
+        reloadBtn.id = 'reloadBtn';
+        reloadBtn.innerText = 'RELOAD';
+        reloadBtn.onclick = reload;
+        controls.appendChild(reloadBtn);
+
+        function switchWeapon(key) {
+            currentWep = key;
+            document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active-btn'));
+            document.getElementById('btn_' + key).classList.add('active-btn');
+            updateUI();
+        }
+        switchWeapon('pistol');
+
+        function updateUI() {
+            let w = weapons[currentWep];
+            document.getElementById('ammoDisplay').innerText = `AMMO: ${w.ammo}/${w.mag}`;
+            document.getElementById('scoreDisplay').innerText = `SCORE: ${score}`;
+            reloadBtn.style.display = (w.ammo === 0) ? 'block' : 'none';
+        }
+
+        function reload() {
+            weapons[currentWep].ammo = weapons[currentWep].mag;
+            updateUI();
+        }
+
+        // Spawn Targets
+        setInterval(() => {
+            if (targets.length < 5) {
+                targets.push({
+                    x: Math.random() * (canvas.width - 60) + 30,
+                    y: Math.random() * (canvas.height - 200) + 50,
+                    r: 0, maxR: Math.random() * 20 + 15,
+                    life: 100 // Frames until it vanishes
+                });
+            }
+        }, 800);
+
+        // Shooting Logic
+        canvas.addEventListener('touchstart', (e) => {
+            let w = weapons[currentWep];
+            if (w.ammo <= 0) { reloadBtn.style.display = 'block'; return; }
+            
+            w.ammo--;
+            updateUI();
+
+            // Apply Knockback/Recoil (Screen Shake)
+            shakeFrames = 5;
+            shakeIntensity = w.recoil;
+
+            // Check hit (Supports Multi-touch)
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                let tx = e.changedTouches[i].clientX;
+                let ty = e.changedTouches[i].clientY;
+
+                // Visual Blast Radius
+                ctx.beginPath();
+                ctx.arc(tx, ty, w.radius, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.3)';
+                ctx.fill();
+
+                // Hit detection based on weapon blast radius
+                for (let j = targets.length - 1; j >= 0; j--) {
+                    let t = targets[j];
+                    let dist = Math.hypot(tx - t.x, ty - t.y);
+                    if (dist < w.radius + t.r) {
+                        targets.splice(j, 1);
+                        score += 10;
+                        updateUI();
+                    }
+                }
+            }
+        });
+
+        // Main Game Loop (Optimized for old phones)
+        function loop() {
+            // Draw Background (Clearing canvas)
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Targets
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#ffd700';
+            for (let i = targets.length - 1; i >= 0; i--) {
+                let t = targets[i];
+                t.life--;
+                if (t.r < t.maxR) t.r += 2; // Grow animation
+                
+                if (t.life <= 0) {
+                    targets.splice(i, 1);
+                    continue;
+                }
+
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+                ctx.stroke();
+                
+                // Bullseye dot
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, t.r * 0.3, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffd700';
+                ctx.fill();
+            }
+
+            // Screen Shake Logic (The "Knockback")
+            if (shakeFrames > 0) {
+                let dx = (Math.random() - 0.5) * shakeIntensity * 2;
+                let dy = (Math.random() - 0.5) * shakeIntensity * 2;
+                gameArea.style.transform = `translate(${dx}px, ${dy}px)`;
+                shakeFrames--;
+            } else {
+                gameArea.style.transform = `translate(0px, 0px)`;
+            }
+
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>
